@@ -160,6 +160,7 @@ def conditioned_samples(model      : nn.Module,
         xt = model.rand_input(batchsize).to(accelerator.device) * sigmas[0]
     else:
         batchsize = xt.shape[0]
+        xt = xt.to(accelerator.device)
     if c is None:
         # mask all context
         context_mask = torch.zeros(batchsize, 1).to(accelerator.device)

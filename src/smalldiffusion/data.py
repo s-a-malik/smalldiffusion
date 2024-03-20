@@ -35,7 +35,7 @@ class StarDataset(Dataset):
     """
     Star-shaped dataset with regression targets as the radius.
     """
-    def __init__(self, radius, n_points, n_arms=5, spikeness=0.3, noise_std=0.05, seed=0):
+    def __init__(self, radius, n_points, n_arms=5, spikeness=0.3, noise_std=0.05, seed=0, sample_dist=None):
         self.radius = radius
         self.n_points = n_points
         self.n_arms = n_arms
@@ -44,6 +44,8 @@ class StarDataset(Dataset):
         self.seed = seed
         torch.manual_seed(seed)
         self.data, self.radii = self._generate_star(radius, n_points, n_arms, spikeness, noise_std)
+        if sample_dist is not None:
+            self.sample_from_dist(sample_dist)
 
     def __len__(self):
         return len(self.data)
@@ -70,6 +72,14 @@ class StarDataset(Dataset):
         c = torch.sqrt(x**2 + y**2).unsqueeze(1)
 
         return data, c
+
+    def sample_from_dist(self, radii_dist):
+        log_probs = radii_dist.log_prob(self.radii)
+        log_probs = torch.clamp(log_probs, min=-20)  # Clip log probabilities to a small positive value
+        # print(log_probs.shape, log_probs)
+        sampled_indices = torch.multinomial(log_probs.exp().squeeze(), len(self.radii), replacement=True)
+        self.data = self.data[sampled_indices]
+        self.radii = self.radii[sampled_indices]
 
 class DatasaurusDozen(Dataset):
     def __init__(self, csv_file, dataset, enlarge_factor=15, delimiter='\t', scale=50, offset=50):
