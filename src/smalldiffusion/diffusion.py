@@ -168,9 +168,9 @@ def conditioned_samples(model      : nn.Module,
     else:
         # don't drop context at test time
         c = c.repeat(2, 1).to(accelerator.device)
-        context_mask = torch.zeros_like(c)
+        context_mask = torch.ones_like(c)
         # context_mask = context_mask.repeat(2, 1)
-        context_mask[batchsize:] = 1. # makes second half of batch context free
+        context_mask[batchsize:] = 0. # makes second half of batch context free
         
     eps = None
     for i, (sig, sig_prev) in enumerate(pairwise(sigmas)):
