@@ -92,6 +92,33 @@ def training_loop(loader     : DataLoader,
             accelerator.backward(loss)
             optimizer.step()
 
+def classifier_free_guidance_training_loop(
+        loader     : DataLoader,
+        model      : nn.Module,
+        schedule   : Schedule,
+        accelerator: Optional[Accelerator] = None,
+        epochs     : int = 10000,
+        lr         : float = 1e-3,
+        drop_prob  : float = 0.1):
+    """
+    Train model using classifier free guidance.
+    """
+    accelerator = accelerator or Accelerator()
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    model, optimizer, loader = accelerator.prepare(model, optimizer, loader)
+    for _ in (pbar := tqdm(range(epochs))):
+        for x0, c in loader:
+            optimizer.zero_grad()
+            # dropout context with some probability
+            context_mask = torch.bernoulli(torch.zeros_like(c)+(1-drop_prob))
+            sigma, eps = generate_train_sample(x0, schedule)
+            eps_hat = model(x0 + sigma * eps, sigma, c, context_mask)
+            loss = nn.MSELoss()(eps_hat, eps)
+            yield SimpleNamespace(**locals()) # For extracting training statistics
+            accelerator.backward(loss)
+            optimizer.step()
+            pbar.set_description(f"loss: {loss:.4f}")
+
 # Generalizes most commonly-used samplers:
 #   DDPM       : gam=1, mu=0.5
 #   DDIM       : gam=1, mu=0
@@ -115,5 +142,49 @@ def samples(model      : nn.Module,
         eps_av = eps * gam + eps_prev * (1-gam)  if i > 0 else eps
         sig_p = (sig_prev/sig**mu)**(1/(1-mu)) # sig_prev == sig**mu sig_p**(1-mu)
         eta = (sig_prev**2 - sig_p**2).sqrt()
+        xt = xt - (sig - sig_p) * eps_av + eta * model.rand_input(batchsize).to(xt)
+        yield xt
+
+@torch.no_grad()
+def conditioned_samples(model      : nn.Module,
+                       sigmas     : torch.FloatTensor,
+                       gam        : float = 1.,
+                       mu         : float = 0.,
+                       xt         : Optional[torch.FloatTensor] = None,
+                       accelerator: Optional[Accelerator] = None,
+                       batchsize  : int = 1,
+                       c          : Optional[torch.FloatTensor] = None,
+                       guide_w    : float = 2.0):
+    accelerator = accelerator or Accelerator()
+    if xt is None:
+        xt = model.rand_input(batchsize).to(accelerator.device) * sigmas[0]
+    else:
+        batchsize = xt.shape[0]
+    if c is None:
+        # mask all context
+        context_mask = torch.zeros(batchsize, 1).to(accelerator.device)
+        context_mask = context_mask.repeat(2, 1)
+        c = torch.zeros(batchsize*2, 1).to(accelerator.device)
+    else:
+        # don't drop context at test time
+        c = c.repeat(2, 1).to(accelerator.device)
+        context_mask = torch.zeros_like(c)
+        # context_mask = context_mask.repeat(2, 1)
+        context_mask[batchsize:] = 1. # makes second half of batch context free
+        
+    eps = None
+    for i, (sig, sig_prev) in enumerate(pairwise(sigmas)):
+        # double the batch
+        xt = xt.repeat(2, 1)
+
+        eps_prev = eps
+        eps_full = model(xt, sig.to(xt), c, context_mask)
+        eps1 = eps_full[:batchsize]
+        eps2 = eps_full[batchsize:]
+        eps = (1+guide_w)*eps1 - guide_w*eps2
+        eps_av = eps * gam + eps_prev * (1-gam)  if i > 0 else eps
+        sig_p = (sig_prev/sig**mu)**(1/(1-mu)) # sig_prev == sig**mu sig_p**(1-mu)
+        eta = (sig_prev**2 - sig_p**2).sqrt()
+        xt = xt[:batchsize] # only keep the first half of the batch
         xt = xt - (sig - sig_p) * eps_av + eta * model.rand_input(batchsize).to(xt)
         yield xt

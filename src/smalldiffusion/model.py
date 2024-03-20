@@ -34,6 +34,40 @@ class TimeInputMLP(nn.Module, ModelMixin):
         nn_input = torch.cat([x, sigma_embeds], dim=1)               # shape: b x (dim + 2)
         return self.net(nn_input)
 
+class TimeInputMLPConditional(nn.Module, ModelMixin):
+    def __init__(self, dim=2, cond_dim=1, cond_hid_dim=16, hidden_dims=(16,128,256,128,16)):
+        super().__init__()
+
+        self.input_dims = (dim,)
+        self.cond_dim = cond_dim
+        self.cond_hid_dim = cond_hid_dim
+
+        # one hot embedding
+        if cond_dim > 1:
+            self.c_embed = nn.Embedding(cond_dim, cond_hid_dim)
+        else:
+            self.c_embed = nn.Linear(cond_dim, cond_hid_dim)
+        layers = []
+        for in_dim, out_dim in pairwise((dim + 2 + cond_hid_dim,) + hidden_dims):
+            layers.extend([nn.Linear(in_dim, out_dim), nn.GELU()])
+        layers.append(nn.Linear(hidden_dims[-1], dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x, sigma, c, context_mask):
+        # x     shape: b x dim
+        # sigma shape: b x 1 or scalar
+        # c     shape: b x 1
+        # context_mask shape: b x 1
+        sigma_embeds = get_sigma_embeds(x.shape[0], sigma.squeeze()) # shape: b x 2
+        # embed c
+        c_embeds = self.c_embed(c) # shape: b x cond_hid_dim
+        # mask context
+        c_embeds = c_embeds * context_mask
+
+        nn_input = torch.cat([x, sigma_embeds, c_embeds], dim=1)               # shape: b x (dim + c_embed_dim + 2)
+        return self.net(nn_input)
+
+
 def sq_norm(M, k):
     # M: b x n --(norm)--> b --(repeat)--> b x k
     return (torch.norm(M, dim=1)**2).unsqueeze(1).repeat(1,k)
