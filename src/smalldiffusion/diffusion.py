@@ -156,6 +156,7 @@ def conditioned_samples(model      : nn.Module,
                        c          : Optional[torch.FloatTensor] = None,
                        guide_w    : float = 2.0):
     accelerator = accelerator or Accelerator()
+    model = model.to(accelerator.device)
     if xt is None:
         xt = model.rand_input(batchsize).to(accelerator.device) * sigmas[0]
     else:
